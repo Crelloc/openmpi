@@ -1,15 +1,15 @@
-CFLAGS:= -Wall -Werror -O0 -g -fprofile-arcs -ftest-coverage
+CFLAGS:= -Wall -Werror -g -fprofile-arcs -ftest-coverage
 
 
 all: output
 
 mmm_mpi: mmm_mpi.o
 	mpicc mmm_mpi.o -o mmm_mpi -lgcov
-	
+
 mmm_mpi.o: mmm_mpi.c
-	mpicc $(CFLAGS) -c mmm_mpi.c
+	mpicc $(CFLAGS) -O2 -c mmm_mpi.c
 	
-output: mmm_mpi test_2p_500n
+output: mmm_mpi test_2p_500n #test_4p_500n
 	@echo
 	@echo '*'
 	@echo '* Generating HTML output'
@@ -36,6 +36,32 @@ test_2p_500n:
 	mpirun -np 2 ./mmm_mpi 500
 	lcov --capture --directory . --output-file trace_args.info --test-name test_2p_500n --no-external
 
+test_4p_500n:
+	@echo
+	@echo '*'
+	@echo '* Test: running mpirun -n 4 ./mmm_mpi 500'
+	@echo '*'
+	@echo
+	lcov --zerocounters --directory .
+	mpirun -n 4 ./mmm_mpi 500
+	lcov --capture --directory . --output-file trace_args.info --test-name test_4p_500n --no-external
+debug_4p: mmm_mpi_d
+	@echo
+	@echo '*'
+	@echo '* debug: running mpirun -np 4 xterm -e gdb ./mmm_mpi_d'
+	@echo '*'
+	@echo
+	mpirun -np 4 xterm -e gdb ./mmm_mpi_d
+
+debug_2p: mmm_mpi_d
+	@echo
+	@echo '*'
+	@echo '* debug: running mpirun -np 2 xterm -e gdb ./mmm_mpi_d'
+	@echo '*'
+	@echo
+	mpirun -np 2 xterm -e gdb ./mmm_mpi_d	
+
+	
 clean:
 	rm mmm_mpi *.o *.gcno *.gcda *.info
 	rm -r ./output
