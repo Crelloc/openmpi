@@ -1,7 +1,7 @@
 CFLAGS:= -Wall -Werror -g -fprofile-arcs -ftest-coverage
 
 
-all: output
+all: mmm_mpi
 
 mmm_mpi: mmm_mpi.o
 	mpicc mmm_mpi.o -o mmm_mpi -lgcov
@@ -63,5 +63,8 @@ debug_2p: mmm_mpi_d
 
 	
 clean:
-	rm mmm_mpi *.o *.gcno *.gcda *.info
+	rm mmm_mpi *.o 
+
+clean_lvoc:
+	rm *.gcno *.gcda *.info
 	rm -r ./output

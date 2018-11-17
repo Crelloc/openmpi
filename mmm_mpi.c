@@ -15,7 +15,6 @@
 #define BILLION                             1000000000
 #define TOTAL_CORES                         8
 #define MIN(x, y)                           ((y ^ ((x ^ y) & -(x < y))))
-static const int EXITCODE_FAILURE         = 1;
 static const int MATRIX_SIZE_LOWERBOUND   = 1;
 static const int MATRIX_SIZE_UPPERBOUND   = BILLION;
 typedef enum{ INIT_STATE, DISTRIBUTE_STATE, IDLE_STATE, COMPUTE_STATE} g_state;
@@ -74,13 +73,13 @@ int parse_arguments(int argc, char** argv, int* N)
 {
     if (argc != 2)
     {
-        print_error_message("Usage: ./mmm_mpi N");
+        print_error_message("Usage: mmm_mpi N");
         return 1;
     }
     *N = atoi(argv[1]);
     if (!((*N) >= MATRIX_SIZE_LOWERBOUND && (*N) <= MATRIX_SIZE_UPPERBOUND))
     {
-        print_error_message("Error: wrong matrix order (0 < N <= BILLION)");
+        print_error_message("Error: wrong matrix order (N > 0)");
         return 1;
     }
     return 0;
@@ -104,18 +103,21 @@ void ikj(matrix_t* m, int start, int end, int N)
     }
 }
 
-// static void build_mpi_type(MPI_Datatype *mpi_matrix_t){
-// 
-//     MPI_Datatype type[3] = { MPI_DOUBLE, MPI_DOUBLE, MPI_DOUBLE };
-//     int blocklen[1] = {3};
-// 
-//     MPI_Aint offsets[3];
-//     offsets[0] = offsetof(matrix_t, a);
-//     offsets[1] = offsetof(matrix_t, b);
-//     offsets[2] = offsetof(matrix_t, c);
-//     MPI_Type_create_struct(3, blocklen, offsets, type, mpi_matrix_t);
-//     MPI_Type_commit(mpi_matrix_t);
-// }
+void mmblock(matrix_t* m, int start, int end, int N){
+    int i, ii, j, jj, k, kk;
+    int block_size = 16;
+    double *matA = m->a;
+    double *matB = m->b;
+    double *matC = m->c;
+
+    for(i=start; i<end; i += block_size)
+        for(j=0; j<N; j += block_size)
+            for(k=0; k<N; k += block_size)
+                for (ii = i; ii < MIN((i+block_size), end); ii++)
+                    for (jj = j; jj < MIN((j+block_size), N); jj++)
+                        for (kk = k; kk < MIN((k+block_size), N); kk++)
+                            matC[ii*N+jj] += matA[ii*N+kk] * matB[kk*N+jj];
+}
 
 int main(int argc, char** argv)
 {
@@ -132,39 +134,55 @@ int main(int argc, char** argv)
     MPI_Request     *reqs=NULL, req;
     MPI_Status      *stats=NULL;
 
-    ierr = MPI_Init(&argc, &argv);
-    if(ierr != MPI_SUCCESS){
+    if(MPI_Init(&argc, &argv) != MPI_SUCCESS){
         //error handling
     }
-    ierr = MPI_Comm_rank(MPI_COMM_WORLD, &procid);
-    if(ierr != MPI_SUCCESS){
+    if(MPI_Comm_rank(MPI_COMM_WORLD, &procid) != MPI_SUCCESS){
         //error handling
     }
-    ierr = MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
-    if(ierr != MPI_SUCCESS){
+    if(MPI_Comm_size(MPI_COMM_WORLD, &numprocs) != MPI_SUCCESS){
         //error handling
-    }
-    if(numprocs < 2){
-        printf("ERROR: Number of processes is less than 2!\n");
-        return MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-    else{
-        wprocs = numprocs -1; //number of worker processes
     }
 
+    wprocs = numprocs - 1; //number of worker processes
+
     while(1){
+
         if(state == INIT_STATE){
-//             printf("state %d, ProcID %d, start=%d, end=%d\n", state,
-//                                                         procid, se[0], se[1]);
+
             if(procid == 0){
                 if (parse_arguments(argc, argv, &N) != 0){
-                    ret = EXITCODE_FAILURE;
+                    ret = 1;
                     goto ERROR;
                 }
             }
 
-            ierr = MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            if(ierr != MPI_SUCCESS)
+            if(MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+                MPI_Abort(MPI_COMM_WORLD, 1);
+
+            if(!(matrix_id.a = malloc(N * N * sizeof(double)))){
+                    ret = 1;
+                    goto MEMORY_FAIL;
+            }
+
+            if(!(matrix_id.b = malloc(N * N * sizeof(double)))){
+                ret = 1;
+                goto MEMORY_FAIL;
+            }
+
+            if(!(matrix_id.c = calloc(N * N,  sizeof(double)))){
+                ret = 1;
+                goto MEMORY_FAIL;
+            }
+
+            if(procid == 0){
+
+                initialize_matrices(matrix_id.a, matrix_id.b, N);
+            }
+
+            if(MPI_Bcast(matrix_id.a, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            if(MPI_Bcast(matrix_id.b, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
                 MPI_Abort(MPI_COMM_WORLD, 1);
 
             if(procid == 0){
@@ -185,28 +203,10 @@ int main(int argc, char** argv)
                 }
             }
 
-            matrix_id.a = malloc(N * N * sizeof(double));
-            if(!matrix_id.a){
-                ret = 1;
-                goto MEMORY_FAIL;
-            }
-            matrix_id.b = malloc(N * N * sizeof(double));
-            if(!matrix_id.b){
-                ret = 1;
-                goto MEMORY_FAIL;
-            }
-            matrix_id.c = calloc(N * N,  sizeof(double));
-            if(!matrix_id.c){
-                ret = 1;
-                goto MEMORY_FAIL;
-            }
 
-            initialize_matrices(matrix_id.a, matrix_id.b, N);
             next_state = DISTRIBUTE_STATE;
 
         } else if(state == DISTRIBUTE_STATE){
-                //printf("state %d, ProcID %d, start=%d, end=%d\n", state,
-                //                                        procid, se[0], se[1]);
                 if(procid == 0){
                     int i;
                     int i_step = N / wprocs;
@@ -240,49 +240,27 @@ int main(int argc, char** argv)
                 next_state = IDLE_STATE;
 
         } else if(state == COMPUTE_STATE){
-//             printf("state %d, ProcID %d, start=%d, end=%d\n", state,
-//                                                        procid, se[0], se[1]);
+
             if(procid == 0){
                 int i, offset;
-                int sp, sz;//sp2, ep2, sz2=0;
-//                 double tbuf[250000];
+                int sp, sz;
                 clock_gettime(CLOCK_MONOTONIC, &start);
                 for(i=1; i<numprocs; ++i){
                     sp = lookup_id[i].sp;
                     sz = lookup_id[i].sz;
                     offset = N * sp;
-//                     printf("frome rank %d: rank %d, start %d, end %d, sz %d, offset %d\n", procid,i ,sp, lookup_id[i].ep, sz, offset);
                     MPI_Irecv(matrix_id.c+offset, sz, MPI_DOUBLE, i, 0,
                               MPI_COMM_WORLD, &reqs[i]);
-//                     ierr = MPI_Recv(matrix_id.c+offset, sz, MPI_DOUBLE, i, 0,
-//                               MPI_COMM_WORLD, &status);
-//                     if(ierr != MPI_SUCCESS){
-//                         printf("reveived wrong size\n");
-//                         MPI_Abort(MPI_COMM_WORLD, 1);
-//                     }
-//                     else{
-// //                                   for(int i=0; i<N*N; i+=5){
-// //                     printf("%f %f %f %f %f\n", matrix_id.c[i],
-// //                         matrix_id.c[i+1],matrix_id.c[i+2],matrix_id.c[i+3],matrix_id.c[i+4]
-// //                     );
-// //                 } putchar('\n');
-//                     }
+
                 }
 
                 MPI_Waitall(wprocs, reqs+1, stats+1);
 
             }
             else{
-                //printf("procid %d is computing matrix multiplication\n", procid);
+
                 ikj(&matrix_id, se[0], se[1], N);
-//                 printf("from rank %d: rank %d, start %d, end %d, sz %d\n", procid, procid, se[0], se[1],(se[1]-se[0]+1)*N);
                 ierr = MPI_Isend(matrix_id.c+(se[0]*N), se[2], MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req);
-//                 for(int i=0; i<N*N; i+=5){
-//                     printf("%f %f %f %f %f\n", matrix_id.c[i],
-//                         matrix_id.c[i+1],matrix_id.c[i+2],matrix_id.c[i+3],matrix_id.c[i+4]
-//                     ); 
-//                 }
-//                 putchar('\n');
                 MPI_Wait( &req, NULL);
             }
 
@@ -296,17 +274,10 @@ int main(int argc, char** argv)
                 printf("B: %u\n", matrix_checksum(N, matrix_id.b, sizeof(double)));
                 printf("C: %u\n", matrix_checksum(N, matrix_id.c, sizeof(double)));
 
-//                 for(int i=0; i<N*N; i+=5){
-//                     printf("%f %f %f %f %f\n", matrix_id.c[i],
-//                         matrix_id.c[i+1],matrix_id.c[i+2],matrix_id.c[i+3],matrix_id.c[i+4]
-//                     );
-//                 }
             }
             break;
 
         } else if(state == IDLE_STATE){
-            //printf("state %d, ProcID %d, start=%d, end=%d\n", state,
-            //                                            procid, se[0], se[1]);
             ierr = MPI_Barrier(MPI_COMM_WORLD);
             if(ierr != MPI_SUCCESS)
                 MPI_Abort(MPI_COMM_WORLD, 1);
@@ -314,7 +285,6 @@ int main(int argc, char** argv)
         }
         state = next_state;
     }
-    //printf("state: break, ProcID %d done\n", procid);
 
 MEMORY_FAIL:
     if(ret > 0){
