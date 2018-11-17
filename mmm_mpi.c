@@ -1,5 +1,6 @@
 /* @file mmm_mpi.c
  * Authors: Thomas Turner(tdturner@ucdavis.edu)
+ *          Andy Li(ayjli@ucdavis.edu)
  *
  */
 
@@ -11,19 +12,12 @@
 #include <mpi.h>
 #include <unistd.h>
 
-
-#define BILLION                             1000000000
+#define                                     BILLION 1E9
 #define TOTAL_CORES                         8
 #define MIN(x, y)                           ((y ^ ((x ^ y) & -(x < y))))
 static const int MATRIX_SIZE_LOWERBOUND   = 1;
 static const int MATRIX_SIZE_UPPERBOUND   = BILLION;
-typedef enum{ INIT_STATE, DISTRIBUTE_STATE, IDLE_STATE, COMPUTE_STATE} g_state;
 
-struct start_and_endpoints{
-    int sp, ep, sz;
-};
-
-typedef struct start_and_endpoints table_lookup_t;
 
 struct matricies{
     double* a, *b, *c;
@@ -31,6 +25,11 @@ struct matricies{
 
 typedef struct matricies matrix_t;
 
+//https://www.softwariness.com/articles/monotonic-clocks-windows-and-posix/
+static double TimeSpecToSeconds(struct timespec* ts)
+{
+    return (double)ts->tv_sec + (double)ts->tv_nsec / 1000000000.0;
+}
 /*
  * Initilize matrix A with Aij = i + j, matrix B with Bij = i + j * 2
  * Input: matrix A, matrix B, N: size of matrix A, B
@@ -123,16 +122,13 @@ int main(int argc, char** argv)
 {
     int             ret = 0;
     int             N = 0;
-    int             se[3];
-    g_state         state = INIT_STATE, next_state;
+    int             se[4]; //se[start, end, size, offset]
     struct          timespec start, end;
-    double          d_time = 0;
+    //double          d_time;
     int             ierr, procid, numprocs, wprocs;
     MPI_Status      status;
-    table_lookup_t  *lookup_id=NULL;
     matrix_t        matrix_id;
-    MPI_Request     *reqs=NULL, req;
-    MPI_Status      *stats=NULL;
+    MPI_Request     req[3];
 
     if(MPI_Init(&argc, &argv) != MPI_SUCCESS){
         //error handling
@@ -146,145 +142,115 @@ int main(int argc, char** argv)
 
     wprocs = numprocs - 1; //number of worker processes
 
-    while(1){
+/**> initialize section */
+    if(procid == 0){
+        if (parse_arguments(argc, argv, &N) != 0){
+            ret = 1;
+            goto ERROR;
+        }
+    }
 
-        if(state == INIT_STATE){
+    if(MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, 1);
 
-            if(procid == 0){
-                if (parse_arguments(argc, argv, &N) != 0){
-                    ret = 1;
-                    goto ERROR;
-                }
+    if(!(matrix_id.a = malloc(N * N * sizeof(double)))){
+            ret = 1;
+            goto MEMORY_FAIL;
+    }
+
+    if(!(matrix_id.b = malloc(N * N * sizeof(double)))){
+        ret = 1;
+        goto MEMORY_FAIL;
+    }
+
+    if(!(matrix_id.c = calloc(N * N,  sizeof(double)))){
+        ret = 1;
+        goto MEMORY_FAIL;
+    }
+
+    if(procid == 0){
+
+        initialize_matrices(matrix_id.a, matrix_id.b, N);
+    }
+
+    if(MPI_Bcast(matrix_id.a, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    if(MPI_Bcast(matrix_id.b, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, 1);
+
+
+    /**>distribute section */
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    if(procid == 0){
+
+        int i;
+        int i_step = N / wprocs;
+        int r = N % wprocs;
+        int prev_e = 0;
+        for (i = 0; i < wprocs; ++i){
+            se[0] = prev_e;
+            se[1] = MIN((prev_e+i_step), N);
+            if(r > 0){
+                r-=1;
+                se[1]+=1;
             }
+            se[2] = (se[1]-se[0])*N;
+            se[3] = se[0]*N;
+            prev_e = se[1];
 
-            if(MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
-                MPI_Abort(MPI_COMM_WORLD, 1);
-
-            if(!(matrix_id.a = malloc(N * N * sizeof(double)))){
-                    ret = 1;
-                    goto MEMORY_FAIL;
-            }
-
-            if(!(matrix_id.b = malloc(N * N * sizeof(double)))){
-                ret = 1;
-                goto MEMORY_FAIL;
-            }
-
-            if(!(matrix_id.c = calloc(N * N,  sizeof(double)))){
-                ret = 1;
-                goto MEMORY_FAIL;
-            }
-
-            if(procid == 0){
-
-                initialize_matrices(matrix_id.a, matrix_id.b, N);
-            }
-
-            if(MPI_Bcast(matrix_id.a, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            if(MPI_Bcast(matrix_id.b, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
-                MPI_Abort(MPI_COMM_WORLD, 1);
-
-            if(procid == 0){
-                lookup_id = malloc((numprocs)*sizeof(table_lookup_t));
-                if(!lookup_id){
-                    ret = 1;
-                    goto MEMORY_FAIL;
-                }
-                reqs = malloc(numprocs*sizeof(MPI_Request));
-                if(!reqs){
-                    ret = 1;
-                    goto MEMORY_FAIL;
-                }
-                stats = malloc(numprocs*sizeof(MPI_Status));
-                if(!stats){
-                    ret = 1;
-                    goto MEMORY_FAIL;
-                }
-            }
-
-
-            next_state = DISTRIBUTE_STATE;
-
-        } else if(state == DISTRIBUTE_STATE){
-                if(procid == 0){
-                    int i;
-                    int i_step = N / wprocs;
-                    int r = N % wprocs;
-                    int prev_e = 0;
-                    for (i = 0; i < wprocs; ++i){
-                        se[0] = prev_e;
-                        se[1] = MIN((prev_e+i_step), N);
-                        if(r > 0){
-                            r-=1;
-                            se[1]+=1;
-                        }
-                        se[2] = (se[1]-se[0])*N;
-                        prev_e = se[1];
-                        lookup_id[i+1].sp = se[0];
-                        lookup_id[i+1].ep = se[1];
-                        lookup_id[i+1].sz = se[2];
-
-                        ierr = MPI_Send(se, 3, MPI_INT, i+1, 0, MPI_COMM_WORLD);
-                        if(ierr != MPI_SUCCESS)
-                            MPI_Abort(MPI_COMM_WORLD, 1);
-                    }
-
-                }
-                else{
-                    ierr = MPI_Recv(se, 3, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
-                    if(ierr != MPI_SUCCESS)
-                        MPI_Abort(MPI_COMM_WORLD, 1);
-
-                }
-                next_state = IDLE_STATE;
-
-        } else if(state == COMPUTE_STATE){
-
-            if(procid == 0){
-                int i, offset;
-                int sp, sz;
-                clock_gettime(CLOCK_MONOTONIC, &start);
-                for(i=1; i<numprocs; ++i){
-                    sp = lookup_id[i].sp;
-                    sz = lookup_id[i].sz;
-                    offset = N * sp;
-                    MPI_Irecv(matrix_id.c+offset, sz, MPI_DOUBLE, i, 0,
-                              MPI_COMM_WORLD, &reqs[i]);
-
-                }
-
-                MPI_Waitall(wprocs, reqs+1, stats+1);
-
-            }
-            else{
-
-                ikj(&matrix_id, se[0], se[1], N);
-                ierr = MPI_Isend(matrix_id.c+(se[0]*N), se[2], MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req);
-                MPI_Wait( &req, NULL);
-            }
-
-            if(procid==0){
-                clock_gettime(CLOCK_MONOTONIC, &end);
-                d_time = (double) (end.tv_sec - start.tv_sec) + 1.0
-                                    * (end.tv_nsec - start.tv_nsec) / BILLION;
-                printf("Running time: %f secs\n", d_time);
-                // print matrix checksum
-                printf("A: %u\n", matrix_checksum(N, matrix_id.a, sizeof(double)));
-                printf("B: %u\n", matrix_checksum(N, matrix_id.b, sizeof(double)));
-                printf("C: %u\n", matrix_checksum(N, matrix_id.c, sizeof(double)));
-
-            }
-            break;
-
-        } else if(state == IDLE_STATE){
-            ierr = MPI_Barrier(MPI_COMM_WORLD);
+            ierr = MPI_Send(se, 4, MPI_INT, i+1, 0, MPI_COMM_WORLD);
             if(ierr != MPI_SUCCESS)
                 MPI_Abort(MPI_COMM_WORLD, 1);
-            next_state = COMPUTE_STATE;
         }
-        state = next_state;
+
     }
+    else{
+        ierr = MPI_Recv(se, 4, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+        if(ierr != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, 1);
+
+    }
+
+/**> compute section */
+
+
+    if(procid != 0){
+        ikj(&matrix_id, se[0], se[1], N);
+        ierr = MPI_Isend(&se[2], 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[0]);
+        ierr = MPI_Isend(&se[3], 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[1]);
+        ierr = MPI_Isend(matrix_id.c+se[3], se[2], MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[2]);
+        MPI_Waitall(3, req, NULL);
+
+
+    }
+    else{
+        int i;
+        for(i=1; i<numprocs; ++i){
+
+            MPI_Recv(&se[2], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+            MPI_Recv(&se[3], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+            MPI_Recv(matrix_id.c+se[3], se[2], MPI_DOUBLE, i, 0,
+                        MPI_COMM_WORLD, &status);
+
+        }
+
+
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    if(procid==0){
+//         d_time =  (end.tv_sec - start.tv_sec) + 1.0
+//                             * (end.tv_nsec - start.tv_nsec) / BILLION;
+        printf("Running time: %f secs\n", TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start));
+        // print matrix checksum
+        printf("A: %u\n", matrix_checksum(N, matrix_id.a, sizeof(double)));
+        printf("B: %u\n", matrix_checksum(N, matrix_id.b, sizeof(double)));
+        printf("C: %u\n", matrix_checksum(N, matrix_id.c, sizeof(double)));
+
+
+    }
+
 
 MEMORY_FAIL:
     if(ret > 0){

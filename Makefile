@@ -1,15 +1,21 @@
-CFLAGS:= -Wall -Werror -g -fprofile-arcs -ftest-coverage
-
+CFLAGS:= -Wall -Werror -g
+COVFLAGS:= -fprofile-arcs -ftest-coverage
 
 all: mmm_mpi
 
 mmm_mpi: mmm_mpi.o
-	mpicc mmm_mpi.o -o mmm_mpi -lgcov
+	mpicc mmm_mpi.o -o mmm_mpi
 
 mmm_mpi.o: mmm_mpi.c
 	mpicc $(CFLAGS) -O2 -c mmm_mpi.c
 	
-output: mmm_mpi test_2p_500n #test_4p_500n
+mmm_mpi_c:
+	mpicc $(CFLAGS) $(COVFLAGS) -o mmm_mpi -lgcov mmm_mpi.c
+
+mmm_mpi_d:
+	mpicc $(CFLAGS) $(COVFLAGS) -O0 -o mmm_mpi -lgcov mmm_mpi.c
+	
+output: mmm_mpi_c test_2p_500n test_4p_500n
 	@echo
 	@echo '*'
 	@echo '* Generating HTML output'
@@ -51,7 +57,7 @@ debug_4p: mmm_mpi_d
 	@echo '* debug: running mpirun -np 4 xterm -e gdb ./mmm_mpi_d'
 	@echo '*'
 	@echo
-	mpirun -np 4 xterm -e gdb ./mmm_mpi_d
+	mpirun -np 4 xterm -e gdb ./mmm_mpi
 
 debug_2p: mmm_mpi_d
 	@echo
@@ -59,7 +65,7 @@ debug_2p: mmm_mpi_d
 	@echo '* debug: running mpirun -np 2 xterm -e gdb ./mmm_mpi_d'
 	@echo '*'
 	@echo
-	mpirun -np 2 xterm -e gdb ./mmm_mpi_d	
+	mpirun -np 2 xterm -e gdb ./mmm_mpi	
 
 	
 clean:
