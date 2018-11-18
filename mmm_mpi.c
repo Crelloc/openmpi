@@ -137,7 +137,7 @@ int main(int argc, char** argv)
     int             procid, numprocs, wprocs;
     MPI_Status      status;
     matrix_t        matrix_id;
-    MPI_Request     req[3];
+    MPI_Request     req[2];
 
     if(MPI_Init(&argc, &argv) != MPI_SUCCESS){
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -220,20 +220,15 @@ int main(int argc, char** argv)
 
     if(procid != 0){
         ikj(&matrix_id, se[0], se[1], N);
-        MPI_Isend(&se[2], 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[0]);
-        MPI_Isend(&se[3], 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[1]);
+        MPI_Isend(&se[2], 2, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[0]);
         MPI_Isend(matrix_id.c + se[3], se[2], MPI_DOUBLE, 0, 0,
-                         MPI_COMM_WORLD, &req[2]);
-        MPI_Waitall(3, req, NULL);
+                         MPI_COMM_WORLD, &req[1]);
+        MPI_Waitall(2, req, NULL);
     }
     else{
         int i;
         for(i = 1; i < numprocs; ++i){
-            if(MPI_Recv(&se[2], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status) != MPI_SUCCESS){
-                free_matrices(&matrix_id);
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-            if(MPI_Recv(&se[3], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status) != MPI_SUCCESS){
+            if(MPI_Recv(&se[2], 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status) != MPI_SUCCESS){
                 free_matrices(&matrix_id);
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
