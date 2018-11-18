@@ -12,6 +12,10 @@
 #include <mpi.h>
 #include <unistd.h>
 
+#if defined (_AVX_)
+#include <immintrin.h>
+#endif
+
 #define                                     BILLION 1E9
 #define TOTAL_CORES                         8
 #define MIN(x, y)                           ((y ^ ((x ^ y) & -(x < y))))
@@ -111,7 +115,7 @@ static int parse_arguments(int argc, char** argv, int* N)
     }
     return 0;
 }
-
+#ifndef _AVX_
 static void ikj(matrix_t* m, int start, int end, int N)
 {
     int i,j,k;
@@ -129,6 +133,33 @@ static void ikj(matrix_t* m, int start, int end, int N)
         }
     }
 }
+#endif
+
+#if defined(_AVX_)
+static void avx_ikj(matrix_t* m, int start, int end, int N){
+    int i,j,k;
+    double *matA = m->a;
+    double *matB = m->b;
+    double *matC = m->c;
+    __m256d r, B, C;
+
+    for(i=start; i<end; i++)
+    {
+        for(k=0; k<N; k++)
+        {
+            r = _mm256_set1_pd(matA[i*N+k]);
+            for(j=0; j<N; j+=4)
+            {
+                C = _mm256_loadu_pd(&matC[i*N+j]);
+                B = _mm256_loadu_pd(&matB[k*N+j]);
+                B = _mm256_mul_pd(B, r);
+                C = _mm256_add_pd(C, B);
+                _mm256_storeu_pd(&matC[i*N+j], C);
+            }
+        }
+    }
+}
+#endif
 
 int main(int argc, char** argv)
 {
@@ -138,6 +169,10 @@ int main(int argc, char** argv)
     MPI_Status      status;
     matrix_t        matrix_id;
     MPI_Request     req[2];
+#if defined (_TS_)
+    double          sum = 0.0;
+    int             repeat = 5, counter = 0;
+#endif
 
     if(MPI_Init(&argc, &argv) != MPI_SUCCESS){
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -154,6 +189,13 @@ int main(int argc, char** argv)
 /**> initialize section */
     if(procid == 0){
         if (parse_arguments(argc, argv, &N) != 0){
+#if defined(_AVX_)
+            if((N % 4) != 0){
+                printf("N: %d, should be a multiple of 4!", N);
+                ret = 0;
+                goto ERROR;
+            }
+#endif
             ret = 1;
             goto ERROR;
         }
@@ -181,7 +223,9 @@ int main(int argc, char** argv)
         free_matrices(&matrix_id);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
-
+#if defined (_TS_)
+REPEAT:
+#endif
 /**>distribute section */
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -219,7 +263,11 @@ int main(int argc, char** argv)
 /**> compute section */
 
     if(procid != 0){
+#if defined (_AVX_)
+        avx_ikj(&matrix_id, se[0], se[1], N);
+#else
         ikj(&matrix_id, se[0], se[1], N);
+#endif
         MPI_Isend(&se[2], 2, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &req[0]);
         MPI_Isend(matrix_id.c + se[3], se[2], MPI_DOUBLE, 0, 0,
                          MPI_COMM_WORLD, &req[1]);
@@ -241,10 +289,15 @@ int main(int argc, char** argv)
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-
+#if defined (_TS_)
+    sum += TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start);
+    counter++;
+    if(counter < repeat)
+        goto REPEAT;
+#endif
     if(procid==0){
 #if defined (_TS_)
-        printf("%d, %d, %f\n", N, numprocs, TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start) );
+        printf("%d, %d, %f\n", N, numprocs,  sum/repeat);
 #else
         printf("Running time: %f secs\n", TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start));
         printf("A: %u\n", matrix_checksum(N, matrix_id.a, sizeof(double)));

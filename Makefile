@@ -12,8 +12,11 @@ mmm_mpi.o: mmm_mpi.c
 TS:
 	mpicc -D_TS_ $(CFLAGS) -O2 -o mmm_mpi -lgcov mmm_mpi.c
 
+avx:
+	mpicc -D_AVX_ $(CFLAGS) -O2 -o mmm_mpi -mavx2 mmm_mpi.c
+
 mmm_mpi_c:
-	mpicc $(CFLAGS) $(COVFLAGS) -o mmm_mpi -lgcov mmm_mpi.c
+	mpicc -D_AVX_ $(CFLAGS) $(COVFLAGS) -o mmm_mpi -lgcov -mavx2 mmm_mpi.c
 
 mmm_mpi_d:
 	mpicc $(CFLAGS) $(COVFLAGS) -O0 -o mmm_mpi -lgcov mmm_mpi.c
@@ -68,12 +71,12 @@ debug_2p: mmm_mpi_d
 	@echo '* debug: running mpirun -np 2 xterm -e gdb ./mmm_mpi_d'
 	@echo '*'
 	@echo
-	mpirun -np 2 xterm -e gdb ./mmm_mpi	
+	mpirun -np 2 xterm -e gdb ./mmm_mpi
 
 	
 clean:
-	rm mmm_mpi *.o 
+	rm mmm_mpi *.o
 
 clean_lvoc:
-	rm *.gcno *.gcda *.info
+	rm *.gcno *.gcda *.info mmm_mpi *.o
 	rm -r ./output
