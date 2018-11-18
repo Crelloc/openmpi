@@ -8,13 +8,16 @@ mmm_mpi: mmm_mpi.o
 
 mmm_mpi.o: mmm_mpi.c
 	mpicc $(CFLAGS) -O2 -c mmm_mpi.c
-	
+
+TS:
+	mpicc -D_TS_ $(CFLAGS) -O2 -o mmm_mpi -lgcov mmm_mpi.c
+
 mmm_mpi_c:
 	mpicc $(CFLAGS) $(COVFLAGS) -o mmm_mpi -lgcov mmm_mpi.c
 
 mmm_mpi_d:
 	mpicc $(CFLAGS) $(COVFLAGS) -O0 -o mmm_mpi -lgcov mmm_mpi.c
-	
+
 output: mmm_mpi_c test_2p_500n test_4p_500n
 	@echo
 	@echo '*'

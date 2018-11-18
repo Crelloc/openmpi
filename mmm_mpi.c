@@ -1,6 +1,6 @@
 /* @file mmm_mpi.c
- * Authors: Thomas Turner(tdturner@ucdavis.edu)
- *          Andy Li(ayjli@ucdavis.edu)
+ *
+ *
  *
  */
 
@@ -130,22 +130,6 @@ static void ikj(matrix_t* m, int start, int end, int N)
     }
 }
 
-void mmblock(matrix_t* m, int start, int end, int N){
-    int i, ii, j, jj, k, kk;
-    int block_size = 16;
-    double *matA = m->a;
-    double *matB = m->b;
-    double *matC = m->c;
-
-    for(i=start; i<end; i += block_size)
-        for(j=0; j<N; j += block_size)
-            for(k=0; k<N; k += block_size)
-                for (ii = i; ii < MIN((i+block_size), end); ii++)
-                    for (jj = j; jj < MIN((j+block_size), N); jj++)
-                        for (kk = k; kk < MIN((k+block_size), N); kk++)
-                            matC[ii*N+jj] += matA[ii*N+kk] * matB[kk*N+jj];
-}
-
 int main(int argc, char** argv)
 {
     int             ret = 0, N = 0, se[4]; //se[start, end, size, offset]
@@ -264,10 +248,14 @@ int main(int argc, char** argv)
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     if(procid==0){
+#if defined (_TS_)
+        printf("%d, %d, %f\n", N, numprocs, TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start) );
+#else
         printf("Running time: %f secs\n", TimeSpecToSeconds(&end) - TimeSpecToSeconds(&start));
         printf("A: %u\n", matrix_checksum(N, matrix_id.a, sizeof(double)));
         printf("B: %u\n", matrix_checksum(N, matrix_id.b, sizeof(double)));
         printf("C: %u\n", matrix_checksum(N, matrix_id.c, sizeof(double)));
+#endif
     }
 
     free_matrices(&matrix_id);
